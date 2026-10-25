@@ -1,0 +1,251 @@
+{
+  "name": "archery-query-studio",
+  "displayName": "Archery Query Studio",
+  "description": "在 VS Code 中通过 Archery 浏览数据库对象、编写并执行 SQL、查看/导出结果，类似 HeidiSQL 的查询体验。",
+  "version": "0.1.11",
+  "publisher": "local-dev",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "archery",
+    "sql",
+    "mysql",
+    "database",
+    "heidisql",
+    "query"
+  ],
+  "activationEvents": [
+    "onView:archeryQueryStudio.explorer",
+    "onCommand:archeryQueryStudio.addConnection",
+    "onCommand:archeryQueryStudio.openQueryConsole",
+    "onCommand:archeryQueryStudio.refreshExplorer",
+    "onCommand:archeryQueryStudio.editConnection",
+    "onCommand:archeryQueryStudio.removeConnection",
+    "onCommand:archeryQueryStudio.refreshNode",
+    "onCommand:archeryQueryStudio.newQuery",
+    "onCommand:archeryQueryStudio.selectTop100",
+    "onCommand:archeryQueryStudio.describeTable",
+    "onCommand:archeryQueryStudio.copyName",
+    "onCommand:archeryQueryStudio.showLogs"
+  ],
+  "main": "./dist/extension.js",
+  "icon": "media/icon.png",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "archeryQueryStudio",
+          "title": "Archery 查询",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "archeryQueryStudio": [
+        {
+          "id": "archeryQueryStudio.explorer",
+          "name": "连接与对象",
+          "icon": "media/activity.svg",
+          "contextualTitle": "Archery 查询"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "archeryQueryStudio.explorer",
+        "contents": "还没有 Archery 连接。\n[添加 Archery 连接](command:archeryQueryStudio.addConnection)\n\n连接后可以浏览实例、数据库和表，并打开 SQL 查询工作台。\n[打开查询工作台](command:archeryQueryStudio.openQueryConsole)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "archeryQueryStudio.addConnection",
+        "title": "添加 Archery 连接",
+        "category": "Archery",
+        "icon": "$(add)"
+      },
+      {
+        "command": "archeryQueryStudio.openQueryConsole",
+        "title": "打开 SQL 查询工作台",
+        "category": "Archery",
+        "icon": "$(window)"
+      },
+      {
+        "command": "archeryQueryStudio.refreshExplorer",
+        "title": "刷新 Archery 对象树",
+        "category": "Archery",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "archeryQueryStudio.editConnection",
+        "title": "编辑连接",
+        "category": "Archery",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "archeryQueryStudio.removeConnection",
+        "title": "删除连接",
+        "category": "Archery",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "archeryQueryStudio.refreshNode",
+        "title": "刷新节点",
+        "category": "Archery",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "archeryQueryStudio.newQuery",
+        "title": "新建查询",
+        "category": "Archery",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "archeryQueryStudio.selectTop100",
+        "title": "查询前 100 行",
+        "category": "Archery",
+        "icon": "$(play)"
+      },
+      {
+        "command": "archeryQueryStudio.describeTable",
+        "title": "查看表结构",
+        "category": "Archery"
+      },
+      {
+        "command": "archeryQueryStudio.copyName",
+        "title": "复制名称",
+        "category": "Archery"
+      },
+      {
+        "command": "archeryQueryStudio.showLogs",
+        "title": "查看 Archery 插件日志",
+        "category": "Archery"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "archeryQueryStudio.addConnection",
+          "when": "view == archeryQueryStudio.explorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "archeryQueryStudio.openQueryConsole",
+          "when": "view == archeryQueryStudio.explorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "archeryQueryStudio.refreshExplorer",
+          "when": "view == archeryQueryStudio.explorer",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "archeryQueryStudio.newQuery",
+          "when": "view == archeryQueryStudio.explorer && viewItem =~ /archery\\.(connection|instance|database|schema|table)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "archeryQueryStudio.selectTop100",
+          "when": "view == archeryQueryStudio.explorer && viewItem == archery.table",
+          "group": "inline@2"
+        },
+        {
+          "command": "archeryQueryStudio.describeTable",
+          "when": "view == archeryQueryStudio.explorer && viewItem == archery.table",
+          "group": "navigation@1"
+        },
+        {
+          "command": "archeryQueryStudio.copyName",
+          "when": "view == archeryQueryStudio.explorer && viewItem =~ /archery\\.(connection|instance|database|schema|table)$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "archeryQueryStudio.editConnection",
+          "when": "view == archeryQueryStudio.explorer && viewItem == archery.connection",
+          "group": "connection@1"
+        },
+        {
+          "command": "archeryQueryStudio.refreshNode",
+          "when": "view == archeryQueryStudio.explorer && viewItem =~ /archery\\.(connection|instance|database|schema)$/",
+          "group": "navigation@3"
+        },
+        {
+          "command": "archeryQueryStudio.removeConnection",
+          "when": "view == archeryQueryStudio.explorer && viewItem == archery.connection",
+          "group": "connection@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Archery Query Studio",
+      "properties": {
+        "archeryQueryStudio.defaultLimit": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "查询工作台默认每页加载行数。"
+        },
+        "archeryQueryStudio.requestTimeout": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 1800,
+          "description": "Archery 请求超时时间（秒）。查询执行也使用此超时。"
+        },
+        "archeryQueryStudio.historyLimit": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "查询历史面板每次加载的记录数。"
+        },
+        "archeryQueryStudio.allowInsecureTls": {
+          "type": "boolean",
+          "default": false,
+          "description": "允许连接使用自签名/无效 TLS 证书的 Archery 服务（仅当你信任该服务时开启）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run check && npm run compile && vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository",
+    "vscode:prepublish": "npm run check && npm run compile"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.4",
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/lang-sql": "^6.8.0",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/search": "^6.5.9",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.36.1",
+    "@lezer/highlight": "^1.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "插件会连接 Archery 并执行 SQL，只在受信任的工作区中启用。"
+    }
+  }
+}

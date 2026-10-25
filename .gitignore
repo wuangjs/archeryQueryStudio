@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+.refs/
+.npm-cache/
+*.vsix
+.DS_Store
+.verify/

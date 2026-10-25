@@ -1,0 +1,16 @@
+.vscode/**
+src/**
+webview/**
+test/**
+.refs/**
+.npm-cache/**
+node_modules/**
+out/**
+vitest.config.ts
+tsconfig.json
+esbuild.mjs
+**/*.map
+**/*.ts
+.home/**
+.gitignore
+.verify/**
