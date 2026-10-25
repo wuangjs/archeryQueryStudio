@@ -8,6 +8,15 @@ import {
   pushRecentTableFilter,
   sanitizeTableFilterHistory,
 } from "../src/filterHistory";
+import {
+  buildRedisDataCommand,
+  buildRedisScanCommand,
+  buildRedisTypeCommand,
+  isRedisDbType,
+  normalizeRedisKeyPattern,
+  parseRedisKeyType,
+  parseRedisScanRows,
+} from "../src/redis";
 import { createTableNameMatcher } from "../src/tableFilter";
 import {
   buildInsertStatements,
@@ -63,6 +72,8 @@ let state: AppState = initialState([], { defaultLimit: 100, allowInsecureTls: fa
 let editor: SqlEditor;
 let tableFilter = "";
 let tableFilterRegex = false;
+let redisSearchTimer: number | undefined;
+let redisSearchSeq = 0;
 let dbListSignature = "";
 let tableListSignature = "";
 let dbListContext = "";
@@ -191,7 +202,7 @@ function shellHtml(): string {
             <div id="db-list" class="object-list"></div>
           </div>
           <div class="sidebar-block table-block">
-            <div class="section-heading"><span>数据表</span><span id="table-count" class="count"></span></div>
+            <div class="section-heading"><span id="table-section-label">数据表</span><span id="table-count" class="count"></span></div>
             <div class="filter-wrap">
               <div class="filter-box">${icon("search", 13)}<input id="table-filter" type="text" placeholder="筛选表名" spellcheck="false" /><button id="table-filter-regex" class="clear-filter regex-toggle" title="切换正则匹配" aria-pressed="false"><span class="regex-symbol">.*</span><span id="table-filter-regex-label" class="regex-state">普通</span></button><button id="table-filter-history-btn" class="clear-filter" title="最近筛选记录">${icon("history", 12)}</button><button id="clear-filter" class="clear-filter" title="清除筛选">${icon("x", 12)}</button></div>
               <div id="table-filter-history" class="filter-history" hidden></div>
@@ -316,12 +327,24 @@ function bindEvents(): void {
   });
   filter.addEventListener("input", () => {
     tableFilter = filter.value;
-    renderTableList();
     byId<HTMLButtonElement>("clear-filter").hidden = !tableFilter;
+    if (isRedisInstance()) {
+      window.clearTimeout(redisSearchTimer);
+      redisSearchTimer = window.setTimeout(() => {
+        void searchRedisKeys(tableFilter);
+      }, 450);
+      return;
+    }
+    renderTableList();
   });
   filter.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      rememberTableFilter(tableFilter);
+      if (isRedisInstance()) {
+        window.clearTimeout(redisSearchTimer);
+        void searchRedisKeys(tableFilter);
+      } else {
+        rememberTableFilter(tableFilter);
+      }
       closeTableFilterHistory();
       return;
     }
@@ -362,12 +385,20 @@ function bindEvents(): void {
     filter.value = "";
     byId<HTMLButtonElement>("clear-filter").hidden = true;
     closeTableFilterHistory();
-    renderTableList();
+    if (isRedisInstance()) {
+      window.clearTimeout(redisSearchTimer);
+      void searchRedisKeys("");
+    } else {
+      renderTableList();
+    }
     filter.focus();
   });
   document.addEventListener("mousedown", (event) => {
     if (!(event.target as HTMLElement).closest(".result-menu")) {
       closeResultMenus();
+    }
+    if (!(event.target as HTMLElement).closest(".tab-context-menu")) {
+      closeTabContextMenu();
     }
     if (filterHistory.hidden) {
       return;
@@ -405,6 +436,7 @@ function bindEvents(): void {
   });
 
   byId<HTMLElement>("query-tabs").addEventListener("click", (event) => {
+    closeTabContextMenu();
     const close = (event.target as HTMLElement).closest<HTMLElement>("[data-close-tab]");
     if (close?.dataset.closeTab) {
       event.stopPropagation();
@@ -421,6 +453,14 @@ function bindEvents(): void {
     }
   });
 
+  byId<HTMLElement>("query-tabs").addEventListener("contextmenu", (event) => {
+    const item = (event.target as HTMLElement).closest<HTMLElement>("[data-tab-id]");
+    if (!item?.dataset.tabId) {
+      return;
+    }
+    event.preventDefault();
+    openTabContextMenu(item.dataset.tabId, event.clientX, event.clientY);
+  });
   byId<HTMLButtonElement>("run-query").addEventListener("click", () => void executeQuery(false));
   byId<HTMLButtonElement>("stop-query").addEventListener("click", () => stopQuery());
   byId<HTMLButtonElement>("explain-query").addEventListener("click", () => void executeQuery(true));
@@ -565,6 +605,7 @@ function bindEvents(): void {
     if (event.key === "Escape") {
       closeModal();
       closeResultMenus();
+      closeTabContextMenu();
     }
     const modalOpen = byId<HTMLElement>("modal-root").children.length > 0;
     if (!modalOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -962,13 +1003,14 @@ function renderDbList(): void {
     for (const database of state.catalog.databases) {
       const button = document.createElement("button");
       button.type = "button";
+      const displayName = database.displayName ?? database.name;
       button.className = `object-item${database.name === state.catalog.dbName ? " active" : ""}`;
       button.dataset.db = database.name;
-      button.title = database.name;
+      button.title = displayName;
       button.innerHTML = `${icon("database", 14)}<span class="object-name"></span>`;
       const label = button.querySelector<HTMLElement>(".object-name");
       if (label) {
-        label.textContent = database.name;
+        label.textContent = displayName;
       }
       list.append(button);
     }
@@ -978,6 +1020,82 @@ function renderDbList(): void {
 }
 
 
+
+
+function applyTableFilterUi(): void {
+  const redis = isRedisInstance();
+  const input = document.getElementById("table-filter") as HTMLInputElement | null;
+  const regexButton = document.getElementById("table-filter-regex") as HTMLButtonElement | null;
+  const historyButton = document.getElementById("table-filter-history-btn") as HTMLButtonElement | null;
+  if (regexButton) {
+    regexButton.hidden = redis;
+  }
+  if (historyButton) {
+    historyButton.hidden = redis;
+  }
+  if (redis) {
+    closeTableFilterHistory();
+    if (input) {
+      input.placeholder = "搜索 Key（支持 * ?）";
+      input.title = "输入 Key 模式后自动 SCAN；前后 * 未输入时自动补齐";
+    }
+  } else {
+    updateTableFilterModeUi();
+  }
+}
+
+async function searchRedisKeys(pattern: string): Promise<void> {
+  const tab = activeTab(state);
+  if (
+    !tab?.connectionId ||
+    !tab.instanceName ||
+    !tab.dbName ||
+    !isRedisInstance()
+  ) {
+    return;
+  }
+  const connectionId = tab.connectionId;
+  const instanceName = tab.instanceName;
+  const dbName = tab.dbName;
+  const tabId = tab.id;
+  const seq = ++redisSearchSeq;
+  state.catalog.tablesLoading = true;
+  state.catalog.tablesError = undefined;
+  renderTableList();
+  try {
+    const result = await bridge.request<ExecuteQueryData>({
+      type: "executeQuery",
+      connectionId,
+      tabId,
+      request: {
+        instanceName,
+        dbName,
+        schemaName: "",
+        tableName: "",
+        sql: buildRedisScanCommand(normalizeRedisKeyPattern(pattern), 1000),
+        limit: 1000,
+      },
+    });
+    if (seq !== redisSearchSeq || activeTab(state)?.id !== tabId) {
+      return;
+    }
+    if (state.catalog.instanceName !== instanceName || state.catalog.dbName !== dbName) {
+      return;
+    }
+    const keys = parseRedisScanRows(result.rows);
+    state.catalog.tables = keys.map((name) => ({ name, raw: name }));
+    state.catalog.tablesLoading = false;
+    state.catalog.tablesError = undefined;
+    renderTableList();
+  } catch (error) {
+    if (seq !== redisSearchSeq || activeTab(state)?.id !== tabId) {
+      return;
+    }
+    state.catalog.tablesLoading = false;
+    state.catalog.tablesError = toQueryError(error);
+    renderTableList();
+  }
+}
 
 function updateTableFilterModeUi(): void {
   const input = document.getElementById("table-filter") as HTMLInputElement | null;
@@ -1082,15 +1200,23 @@ function renderTableList(): void {
   const list = byId<HTMLElement>("table-list");
   const count = byId<HTMLElement>("table-count");
   const active = activeTab(state);
+  const redis = isRedisInstance();
+  applyTableFilterUi();
+  const sectionLabel = byId<HTMLElement>("table-section-label");
+  sectionLabel.textContent = redis ? "Redis Keys" : "数据表";
   const filter = tableFilter.trim();
-  const matcher = createTableNameMatcher(filter, tableFilterRegex);
-  const tables = state.catalog.tables.filter((table) => matcher.test(table.name));
+  const matcher = redis ? undefined : createTableNameMatcher(filter, tableFilterRegex);
+  const tables = redis
+    ? state.catalog.tables
+    : state.catalog.tables.filter((table) => matcher?.test(table.name));
   const filterBox = document.getElementById("table-filter")?.closest(".filter-box");
-  filterBox?.classList.toggle("invalid", Boolean(matcher.error));
+  filterBox?.classList.toggle("invalid", Boolean(matcher?.error));
   count.textContent = state.catalog.tables.length
-    ? filter
-      ? `${tables.length}/${state.catalog.tables.length}`
-      : String(state.catalog.tables.length)
+    ? redis
+      ? String(tables.length)
+      : filter
+        ? `${tables.length}/${state.catalog.tables.length}`
+        : String(state.catalog.tables.length)
     : "";
   const signature = JSON.stringify({
     connection: state.activeConnectionId ?? "",
@@ -1099,6 +1225,7 @@ function renderTableList(): void {
     schema: state.catalog.schemaName,
     filter,
     regex: tableFilterRegex,
+    redis,
     loading: state.catalog.tablesLoading,
     error: state.catalog.tablesError ?? "",
     names: state.catalog.tables.map((table) => table.name),
@@ -1119,6 +1246,7 @@ function renderTableList(): void {
     state.catalog.schemaName,
     filter,
     tableFilterRegex ? "regex" : "literal",
+    redis ? "redis" : "sql",
   ].join("\u0000");
   if (context !== tableListContext) {
     tableListContext = context;
@@ -1127,57 +1255,63 @@ function renderTableList(): void {
   tableListSignature = signature;
   list.replaceChildren();
   try {
-  if (!state.catalog.dbName) {
-    list.append(emptyHint("选择数据库后显示数据表"));
-    return;
-  }
-  if (state.catalog.tablesLoading) {
-    list.append(skeleton(6));
-    return;
-  }
-  if (state.catalog.tablesError) {
-    list.append(errorInline(state.catalog.tablesError, () => void refreshCatalog()));
-    return;
-  }
-  if (!state.catalog.tables.length) {
-    list.append(emptyHint("该库中没有可见的数据表"));
-    return;
-  }
-  if (matcher.error) {
-    list.append(emptyHint(matcher.error));
-    return;
-  }
-  if (!tables.length) {
-    list.append(emptyHint("没有匹配的表名"));
-    return;
-  }
-  for (const table of tables) {
-    const row = document.createElement("div");
-    row.className = "table-row";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `object-item${table.name === active?.tableName ? " active" : ""}`;
-    button.dataset.table = table.name;
-    button.title = `${table.name}（单击立即查询）`;
-    button.innerHTML = `${icon("table", 14)}<span class="object-name"></span>`;
-    const label = button.querySelector<HTMLElement>(".object-name");
-    if (label) {
-      label.textContent = table.name;
+    if (!state.catalog.dbName) {
+      list.append(emptyHint(redis ? "选择 Redis DB 后显示 Key" : "选择数据库后显示数据表"));
+      return;
     }
-    const structure = document.createElement("button");
-    structure.type = "button";
-    structure.className = "table-structure-btn";
-    structure.dataset.tableStructure = table.name;
-    structure.title = `查看 ${table.name} 表结构`;
-    structure.setAttribute("aria-label", `查看 ${table.name} 表结构`);
-    structure.innerHTML = icon("info", 13);
-    row.append(button, structure);
-    list.append(row);
-  }
+    if (state.catalog.tablesLoading) {
+      list.append(skeleton(6));
+      return;
+    }
+    if (state.catalog.tablesError) {
+      list.append(errorInline(state.catalog.tablesError, () => void refreshCatalog()));
+      return;
+    }
+    if (!state.catalog.tables.length) {
+      list.append(emptyHint(redis ? "该 DB 中没有可见的 Key" : "该库中没有可见的数据表"));
+      return;
+    }
+    if (matcher?.error) {
+      list.append(emptyHint(matcher.error));
+      return;
+    }
+    if (!tables.length) {
+      list.append(emptyHint(redis ? "没有匹配的 Key" : "没有匹配的表名"));
+      return;
+    }
+    for (const table of tables) {
+      const row = document.createElement("div");
+      row.className = "table-row";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `object-item${table.name === active?.tableName ? " active" : ""}`;
+      button.dataset.table = table.name;
+      button.title = redis
+        ? `${table.name}（单击查询 Key 内容）`
+        : `${table.name}（单击立即查询）`;
+      button.innerHTML = `${icon(redis ? "key" : "table", 14)}<span class="object-name"></span>`;
+      const label = button.querySelector<HTMLElement>(".object-name");
+      if (label) {
+        label.textContent = table.name;
+      }
+      row.append(button);
+      if (!redis) {
+        const structure = document.createElement("button");
+        structure.type = "button";
+        structure.className = "table-structure-btn";
+        structure.dataset.tableStructure = table.name;
+        structure.title = `查看 ${table.name} 表结构`;
+        structure.setAttribute("aria-label", `查看 ${table.name} 表结构`);
+        structure.innerHTML = icon("info", 13);
+        row.append(structure);
+      }
+      list.append(row);
+    }
   } finally {
     list.scrollTop = tableListScrollTop;
   }
 }
+
 
 function renderQueryTabs(): void {
   const bar = byId<HTMLElement>("query-tabs");
@@ -2198,19 +2332,18 @@ async function changeSchema(schemaName: string): Promise<void> {
   await syncCatalog(tab, false);
 }
 
-function queryTable(tableName: string): void {
-  rememberTableFilter(tableFilter);
-  closeTableFilterHistory();
-  const instance = selectedInstance();
-  const instanceName = state.catalog.instanceName;
-  if (!state.activeConnectionId || !instanceName || !state.catalog.dbName) {
-    toast("请先选择实例和数据库", "warning");
-    return;
-  }
-  const schemaName = state.catalog.schemaName;
-  const dbName = state.catalog.dbName;
-  const dbType = instance?.db_type ?? activeTab(state)?.dbType ?? "";
-  const sql = buildSelect({ dbType, dbName, schemaName, tableName });
+interface QueryTabContext {
+  connectionId: string;
+  instanceName: string;
+  dbName: string;
+  schemaName: string;
+  dbType: string;
+  tableName: string;
+  sql: string;
+  title: string;
+}
+
+function prepareQueryTab(context: QueryTabContext): TabState {
   const current = activeTab(state);
   const reusable =
     current &&
@@ -2221,47 +2354,140 @@ function queryTable(tableName: string): void {
   let tab: TabState;
   if (reusable) {
     tab = current;
-    tab.connectionId = state.activeConnectionId;
-    tab.instanceName = instanceName;
-    tab.dbName = dbName;
-    tab.schemaName = schemaName;
-    tab.tableName = tableName;
-    tab.dbType = dbType;
-    tab.sql = sql;
-    tab.title = tableName;
-    tab.error = undefined;
-    tab.columnComments = undefined;
-    tab.tableStructure = undefined;
-    tab.columnFilter = "";
-    tab.filter = "";
-    tab.selectedRows.clear();
-    tab.hasMoreRows = false;
-    tab.pageLoading = false;
-    tab.resultTab = "results";
-    tab.page = 0;
-    tab.sort = undefined;
   } else {
     tab = createTab(state, {
-      connectionId: state.activeConnectionId,
-      instanceName,
-      dbName,
-      schemaName,
-      tableName,
-      dbType,
-      sql,
-      title: tableName,
+      connectionId: context.connectionId,
+      instanceName: context.instanceName,
+      dbName: context.dbName,
+      schemaName: context.schemaName,
+      tableName: context.tableName,
+      dbType: context.dbType,
+      sql: context.sql,
+      title: context.title,
       limit: state.settings.defaultLimit,
     });
     state.tabs.push(tab);
   }
+  tab.connectionId = context.connectionId;
+  tab.instanceName = context.instanceName;
+  tab.dbName = context.dbName;
+  tab.schemaName = context.schemaName;
+  tab.tableName = context.tableName;
+  tab.dbType = context.dbType;
+  tab.sql = context.sql;
+  tab.title = context.title;
+  tab.status = "idle";
+  tab.error = undefined;
+  tab.result = undefined;
+  tab.executedSql = undefined;
+  tab.columnComments = undefined;
+  tab.tableStructure = undefined;
+  tab.describeStatement = undefined;
+  tab.selectedRows.clear();
+  tab.hasMoreRows = false;
+  tab.pageLoading = false;
+  tab.resultTab = "results";
+  tab.page = 0;
+  tab.filter = "";
+  tab.columnFilter = "";
+  tab.sort = undefined;
   state.activeTabId = tab.id;
-  editor.setValue(sql);
+  editor.setValue(context.sql);
   renderAll();
   schedulePersist();
+  return tab;
+}
+
+function queryTable(tableName: string): void {
+  if (!isRedisInstance()) {
+    rememberTableFilter(tableFilter);
+  }
+  closeTableFilterHistory();
+  const instance = selectedInstance();
+  const instanceName = state.catalog.instanceName;
+  if (!state.activeConnectionId || !instanceName || !state.catalog.dbName) {
+    toast("请先选择实例和数据库", "warning");
+    return;
+  }
+  const schemaName = state.catalog.schemaName;
+  const dbName = state.catalog.dbName;
+  const dbType = instance?.db_type ?? activeTab(state)?.dbType ?? "";
+  if (isRedisDbType(dbType)) {
+    void openRedisKey(tableName, {
+      connectionId: state.activeConnectionId,
+      instanceName,
+      dbName,
+      schemaName,
+      dbType,
+    });
+    return;
+  }
+  const sql = buildSelect({ dbType, dbName, schemaName, tableName });
+  const tab = prepareQueryTab({
+    connectionId: state.activeConnectionId,
+    instanceName,
+    dbName,
+    schemaName,
+    dbType,
+    tableName,
+    sql,
+    title: tableName,
+  });
   void loadColumns(tab);
   void executeQuery(false, { sqlOverride: sql });
 }
 
+let redisKeySeq = 0;
+
+async function openRedisKey(
+  key: string,
+  context: Omit<QueryTabContext, "tableName" | "sql" | "title">,
+): Promise<void> {
+  const seq = ++redisKeySeq;
+  toast(`正在读取 Key 类型：${key}`, "info", 1200);
+  let type: string;
+  try {
+    const result = await bridge.request<ExecuteQueryData>({
+      type: "executeQuery",
+      connectionId: context.connectionId,
+      tabId: activeTab(state)?.id ?? "redis-key-type",
+      request: {
+        instanceName: context.instanceName,
+        dbName: context.dbName,
+        schemaName: context.schemaName,
+        tableName: "",
+        sql: buildRedisTypeCommand(key),
+        limit: 1,
+      },
+    });
+    if (seq !== redisKeySeq) {
+      return;
+    }
+    type = parseRedisKeyType(result.rows, result.message);
+  } catch (error) {
+    if (seq === redisKeySeq) {
+      toast(errorText(error), "error");
+    }
+    return;
+  }
+  if (!type || type === "none") {
+    toast(`Key 不存在或已过期：${key}`, "warning");
+    return;
+  }
+  const command = buildRedisDataCommand(key, type);
+  if (!command) {
+    toast(`暂不支持自动查询 ${type} 类型的 Key`, "warning");
+    return;
+  }
+  toast(`Key 类型：${type}`, "info", 1200);
+  prepareQueryTab({
+    ...context,
+    tableName: key,
+    sql: command,
+    title: `${key} · ${type}`,
+  });
+  void executeQuery(false, { sqlOverride: command });
+}
 
 async function loadColumns(tab: TabState): Promise<void> {
   if (!tab.connectionId || !tab.instanceName || !tab.dbName || !tab.tableName) {
@@ -2410,6 +2636,9 @@ async function loadTableMetadataFor(
 }
 
 async function loadTableMetadata(tab: TabState): Promise<TableMetadataEntry | undefined> {
+  if (isRedisDbType(tab.dbType)) {
+    return undefined;
+  }
   const ref = tableMetadataRef(tab);
   if (!ref) {
     return undefined;
@@ -3054,6 +3283,113 @@ function stopQuery(): void {
   renderResults();
   renderStatus();
   toast("已停止等待查询结果。Archery 服务端可能仍在执行该语句。", "warning");
+}
+
+
+let tabContextMenu: HTMLElement | undefined;
+
+function closeTabContextMenu(): void {
+  tabContextMenu?.remove();
+  tabContextMenu = undefined;
+}
+
+function openTabContextMenu(tabId: string, x: number, y: number): void {
+  closeTabContextMenu();
+  const index = state.tabs.findIndex((tab) => tab.id === tabId);
+  if (index < 0) {
+    return;
+  }
+  const menu = document.createElement("div");
+  menu.className = "tab-context-menu";
+  menu.setAttribute("role", "menu");
+  const addItem = (
+    label: string,
+    iconName: string,
+    disabled: boolean,
+    action: "close-current" | "close-others" | "close-right",
+  ): void => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tab-context-item";
+    button.dataset.tabAction = action;
+    button.disabled = disabled;
+    button.innerHTML = `${icon(iconName, 13)}<span></span>`;
+    const text = button.querySelector<HTMLElement>("span");
+    if (text) {
+      text.textContent = label;
+    }
+    menu.append(button);
+  };
+  addItem("关闭此标签", "close", false, "close-current");
+  addItem("关闭其他标签", "close", state.tabs.length <= 1, "close-others");
+  addItem("关闭右侧标签", "chevron-right", index >= state.tabs.length - 1, "close-right");
+  menu.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLElement>("[data-tab-action]");
+    if (!button?.dataset.tabAction) {
+      return;
+    }
+    const action = button.dataset.tabAction;
+    closeTabContextMenu();
+    if (action === "close-current") {
+      closeTab(tabId);
+      return;
+    }
+    if (action === "close-others") {
+      const ids = new Set(
+        state.tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id),
+      );
+      closeTabs(ids, tabId);
+      return;
+    }
+    if (action === "close-right") {
+      const ids = new Set(
+        state.tabs.slice(index + 1).map((tab) => tab.id),
+      );
+      closeTabs(ids, tabId);
+    }
+  });
+  document.body.append(menu);
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  menu.style.left = `${Math.max(6, Math.min(x, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(6, Math.min(y, window.innerHeight - height - 8))}px`;
+  tabContextMenu = menu;
+}
+
+function closeTabs(ids: Set<string>, fallbackTabId?: string): void {
+  if (!ids.size) {
+    return;
+  }
+  const activeId = state.activeTabId;
+  const activeIndex = state.tabs.findIndex((tab) => tab.id === activeId);
+  for (const tab of state.tabs) {
+    if (ids.has(tab.id) && tab.requestId) {
+      bridge.cancel(tab.requestId);
+    }
+  }
+  state.tabs = state.tabs.filter((tab) => !ids.has(tab.id));
+  if (!state.tabs.length) {
+    const replacement = createTab(state, {
+      connectionId: state.activeConnectionId,
+      limit: state.settings.defaultLimit,
+    });
+    state.tabs.push(replacement);
+    state.activeTabId = replacement.id;
+  } else if (activeId && ids.has(activeId)) {
+    const fallback = state.tabs.find((tab) => tab.id === fallbackTabId);
+    state.activeTabId = fallback
+      ? fallback.id
+      : state.tabs[Math.min(Math.max(0, activeIndex), state.tabs.length - 1)].id;
+  }
+  const active = activeTab(state);
+  if (active) {
+    editor.setValue(active.sql);
+  }
+  renderAll();
+  schedulePersist();
+  if (active) {
+    void syncCatalog(active, false);
+  }
 }
 
 function newTab(): void {
@@ -4232,6 +4568,8 @@ function setCellContent(cell: HTMLTableCellElement, value: unknown): void {
 
 
 function resetTableFilter(): void {
+  window.clearTimeout(redisSearchTimer);
+  redisSearchSeq += 1;
   tableFilter = "";
   const feedback = document.getElementById("table-filter") as HTMLInputElement | null;
   if (feedback) {
@@ -4271,6 +4609,10 @@ function resetTabQueryState(tab: TabState): void {
 
 function selectedInstance(): ArcheryInstance | undefined {
   return state.catalog.instances.find((item) => item.instance_name === state.catalog.instanceName);
+}
+
+function isRedisInstance(): boolean {
+  return isRedisDbType(selectedInstance()?.db_type ?? activeTab(state)?.dbType);
 }
 
 function clearTabCatalog(tab: TabState): void {

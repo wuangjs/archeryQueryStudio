@@ -27,7 +27,7 @@
 ```bash
 npm install
 npm run package
-code --install-extension archery-query-studio-0.1.11.vsix
+code --install-extension archery-query-studio-0.1.15.vsix
 ```
 
 也可以直接在 VS Code 中打开 `.vsix` 文件安装。
@@ -68,7 +68,24 @@ npm run compile
 
 ![查看表结构](docs/screenshots/table-structure.png)
 
-### 左侧对象浏览器宽度
+### Redis 实例
+
+当 Archery 实例的 `db_type` 为 `redis` 时，对象浏览器会自动切换为 Redis 兼容模式：
+
+- 数据库列表显示 `db0[100]` 这类 Redis DB 及 Key 数量；
+- “数据表”区域切换为 `Redis Keys`；
+- 输入 Key 模式后自动执行 `SCAN` 搜索，支持 `*`、`?` 等 Redis 通配符；不含通配符时自动前后匹配；
+- 单击 Key 会自动先执行 `TYPE "key"`，再按类型组装并执行查询：
+  - string → `GET "key"`
+  - hash → `HGETALL "key"`
+  - list → `LRANGE "key" 0 999`
+  - set → `SMEMBERS "key"`
+  - zset → `ZRANGE "key" 0 999 WITHSCORES`
+  - stream → `XRANGE "key" - + COUNT 1000`
+- 组装后的命令会显示在 SQL 编辑器中，结果直接展示在结果集，标签页标题会带上 Key 类型；
+- Redis 模式下不显示表结构按钮、正则切换和表名筛选历史。
+
+## 左侧对象浏览器宽度
 
 对象浏览器右侧有一条可拖动的分隔条：
 
@@ -76,6 +93,16 @@ npm run compile
 - 双击分隔条恢复默认宽度；
 - 宽度会保存在本地，重新打开工作台后自动恢复；
 - 表名和数据库名会自动换行，过长的名称也可以完整展示，不再只显示省略号。
+
+## 查询标签右键菜单
+
+右键单击查询标签，可以：
+
+- 关闭此标签；
+- 关闭其他标签；
+- 关闭右侧标签。
+
+关闭标签时会取消该标签正在执行的请求；如果关闭了当前活动标签，会自动切换到目标标签或相邻标签。
 
 ## 数据表筛选与正则
 
@@ -156,6 +183,7 @@ DELETE 会优先使用表结构中的主键列；拿不到主键时使用全部�
 | 表名筛选历史 | 点击筛选框右侧时钟图标，查看最近 30 条记录 |
 | 表名正则筛选 | 点击筛选框右侧 `.*` 后输入正则表达式 |
 | 调整左侧宽度 | 拖动对象浏览器右侧分隔条；双击恢复默认 |
+| 批量关闭标签 | 右键单击查询标签，选择“关闭其他标签”或“关闭右侧标签” |
 | 结果翻页 | 结果底部“上一页 / 下一页”，或修改“每页”行数 |
 | 查看单元格完整内容 | 双击结果单元格 |
 | 展开/收起对象浏览器 | 标题栏左侧按钮 |

@@ -39,6 +39,7 @@ export interface ArcheryInstance {
 
 export interface ResourceItem {
   name: string;
+  displayName?: string;
   raw: unknown;
 }
 

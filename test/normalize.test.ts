@@ -77,3 +77,19 @@ describe("normalize", () => {
     expect(array.rows).toEqual([[1], [2]]);
   });
 });
+
+describe("Redis resource normalization", () => {
+  it("keeps the database value and display text", () => {
+    const items = normalizeResources({
+      status: 0,
+      data: [
+        { value: "0", text: "db0[12]" },
+        { value: "1", text: "db1" },
+      ],
+    });
+    expect(items).toEqual([
+      { name: "0", displayName: "db0[12]", raw: { value: "0", text: "db0[12]" } },
+      { name: "1", displayName: "db1", raw: { value: "1", text: "db1" } },
+    ]);
+  });
+});

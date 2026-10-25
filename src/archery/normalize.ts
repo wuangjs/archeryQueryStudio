@@ -94,6 +94,8 @@ export function normalizeResources(payload: unknown): ResourceItem[] {
         return { name: String(item), raw: item };
       }
       if (isRecord(item)) {
+        const value = asString(item.value);
+        const text = asString(item.text);
         const name = asString(
           item.name ??
             item.table_name ??
@@ -106,9 +108,18 @@ export function normalizeResources(payload: unknown): ResourceItem[] {
             item.field ??
             item.column_name ??
             item.COLUMN_NAME ??
-            item.columnName,
+            item.columnName ??
+            value ??
+            text,
         );
-        return name ? { name, raw: item } : undefined;
+        if (!name) {
+          return undefined;
+        }
+        return {
+          name,
+          displayName: text && text !== name ? text : undefined,
+          raw: item,
+        };
       }
       return undefined;
     })

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.12
 
 - 结果集操作栏只保留“复制结果”和“清除选择”，其余 INSERT、DELETE、导出操作收纳入“更多操作”下拉菜单并分类展示。
 - 复制 DELETE SQL 时字段条件改用 `=`，不再使用 `<=>`；NULL 值使用 `IS NULL`。
