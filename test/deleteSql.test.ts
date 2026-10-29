@@ -19,15 +19,15 @@ const base = {
 describe("buildDeleteStatements", () => {
   it("uses the primary key when available", () => {
     const sql = buildDeleteStatements({ ...base, primaryKey: ["id"] });
-    expect(sql).toContain("DELETE FROM `shop`.`orders` WHERE `id` = 1 LIMIT 1;");
-    expect(sql).toContain("DELETE FROM `shop`.`orders` WHERE `id` = 2 LIMIT 1;");
+    expect(sql).toContain("DELETE FROM `shop`.`orders` WHERE `id` = 1;");
+    expect(sql).toContain("DELETE FROM `shop`.`orders` WHERE `id` = 2;");
     expect(sql).not.toContain("`name`");
   });
 
   it("uses all columns when no key is known", () => {
     const sql = buildDeleteStatements(base);
     expect(sql).toContain(
-      "`id` = 1 AND `name` = 'Alice' AND `note` IS NULL LIMIT 1;",
+      "`id` = 1 AND `name` = 'Alice' AND `note` IS NULL;",
     );
   });
 
@@ -36,7 +36,7 @@ describe("buildDeleteStatements", () => {
       ...base,
       primaryKey: ["id", "name"],
     });
-    expect(sql).toContain("`id` = 1 AND `name` = 'Alice' LIMIT 1;");
+    expect(sql).toContain("`id` = 1 AND `name` = 'Alice';");
   });
 
   it("uses standard SQL NULL handling for non-MySQL databases", () => {

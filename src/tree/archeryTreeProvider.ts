@@ -241,10 +241,10 @@ export class ArcheryTreeProvider
           }),
         ];
       }
-      return items.map((item) =>
+      const databases = items.map((item) =>
         new ArcheryNode({
           kind: "database",
-          label: item.name,
+          label: item.displayName ?? item.name,
           connectionId: node.connectionId,
           connectionName: node.connectionName,
           instanceName: node.instanceName,
@@ -254,6 +254,7 @@ export class ArcheryTreeProvider
           parent: node,
         }),
       );
+      return databases;
     } catch (error) {
       return [this.errorNode(error, node, "无法加载数据库")];
     }

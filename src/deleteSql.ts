@@ -1,4 +1,4 @@
-import { formatSqlLiteral, isMySqlFamily } from "./insertSql";
+import { formatSqlLiteral } from "./insertSql";
 import { qualifiedTableName, quoteIdentifier } from "./sql";
 
 export interface DeleteStatementOptions {
@@ -50,7 +50,6 @@ export function buildDeleteStatements(options: DeleteStatementOptions): string {
   if (!options.columns.length) {
     throw new DeleteSqlError("结果中没有可用的字段");
   }
-  const mysql = isMySqlFamily(options.dbType);
   const primaryKey = (options.primaryKey ?? []).filter((key) =>
     options.columns.some((column) => column.toLowerCase() === key.toLowerCase()),
   );
@@ -81,7 +80,7 @@ export function buildDeleteStatements(options: DeleteStatementOptions): string {
         : `${quoted} = ${formatSqlLiteral(value)}`;
     });
     lines.push(
-      `DELETE FROM ${quotedTable} WHERE ${conditions.join(" AND ")}${mysql ? " LIMIT 1" : ""};`,
+      `DELETE FROM ${quotedTable} WHERE ${conditions.join(" AND ")};`,
     );
   }
   return `${lines.join("\n")}\n`;

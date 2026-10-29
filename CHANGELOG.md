@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.17
+
+- 恢复 Webview 左侧对象浏览器（含表名/Key 筛选、历史、正则和宽度调整）。
+- 撤销原生 TreeView 标题栏筛选方案及 `Ctrl/⌘ + F` 自定义绑定。
+
+## 0.1.16
+
+- 移除 Webview 内置对象浏览器栏，查询工作台全宽显示。
+- TreeView 标题栏新增正则筛选数据库/数据表。
+
+## 0.1.15
+
+- Redis Key 搜索自动补齐缺失的前后 `*`，`user*`、`*user` 都会按 `*user*` 搜索。
+
+## 0.1.14
+
+- Redis Key 单击后自动执行 `TYPE`，按类型组装 GET/HGETALL/LRANGE/SMEMBERS/ZRANGE/XRANGE 并展示结果。
+- 查询标签支持右键关闭此标签、关闭其他标签、关闭右侧标签。
+
+## 0.1.13
+
+- 支持 Redis 类型实例：显示 DB 与 Key 列表，支持 SCAN 搜索 Key。
+- 单击 Redis Key 可查看 Key 类型。
+
 ## 0.1.12
 
 - 结果集操作栏只保留“复制结果”和“清除选择”，其余 INSERT、DELETE、导出操作收纳入“更多操作”下拉菜单并分类展示。

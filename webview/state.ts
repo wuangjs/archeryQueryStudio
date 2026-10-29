@@ -21,6 +21,13 @@ export interface QueryErrorInfo {
 import type { InsertMode } from "../src/insertSql";
 import { sanitizeTableFilterHistory } from "../src/filterHistory";
 
+export interface CellEdit {
+  row: number;
+  column: number;
+  original: unknown;
+  value: unknown;
+}
+
 export interface TableStructureSnapshot {
   columns: string[];
   rows: unknown[][];
@@ -53,6 +60,7 @@ export interface TabState {
   filter: string;
   columnFilter: string;
   selectedRows: Set<number>;
+  cellEdits: Map<string, CellEdit>;
   hasMoreRows: boolean;
   pageLoading: boolean;
   insertMode: InsertMode;
@@ -177,6 +185,7 @@ export function createTab(
     filter: "",
     columnFilter: "",
     selectedRows: new Set<number>(),
+    cellEdits: new Map<string, CellEdit>(),
     hasMoreRows: false,
     pageLoading: false,
     insertMode: "insert",

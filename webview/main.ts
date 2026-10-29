@@ -26,6 +26,10 @@ import {
   type InsertMode,
 } from "../src/insertSql";
 import { buildSelect, clearOrderBy, toggleOrderBy } from "../src/sql";
+import {
+  buildUpdateStatements,
+  UpdateSqlError,
+} from "../src/updateSql";
 import type {
   ArcheryInstance,
   ConnectionHealth,
@@ -532,10 +536,24 @@ function bindEvents(): void {
       suppressRowClick = false;
       return;
     }
+    const cell = target.closest<HTMLElement>("td[data-cell-row]");
+    if (cell) {
+      if (target.closest("input, textarea, select") || event.detail > 1) {
+        return;
+      }
+      const tab = activeTab(state);
+      if (tab?.result && tab.status !== "running") {
+        commitActiveCellEdit(cell);
+        selectResultCell(cell);
+      }
+      return;
+    }
     const row = target.closest<HTMLTableRowElement>(".grid tbody tr[data-row-index]");
     if (row && !target.closest("input, button, a, select, textarea, label")) {
       const tab = activeTab(state);
       if (tab?.result && tab.status !== "running") {
+        commitActiveCellEdit();
+        clearSelectedResultCell();
         const index = Number(row.dataset.rowIndex);
         if (tab.selectedRows.has(index)) {
           tab.selectedRows.delete(index);
@@ -550,17 +568,22 @@ function bindEvents(): void {
   document.addEventListener("mousemove", moveRowDrag);
   document.addEventListener("mouseup", endRowDrag);
   byId<HTMLElement>("result-body").addEventListener("dblclick", (event) => {
-    const cell = (event.target as HTMLElement).closest<HTMLElement>("[data-cell-row]");
-    if (!cell) {
+    const target = event.target as HTMLElement;
+    const cell = target.closest<HTMLElement>("[data-cell-row]");
+    if (!cell || target.closest("input, textarea, select")) {
       return;
     }
     const tab = activeTab(state);
-    if (!tab?.result) {
+    if (!tab?.result || tab.status === "running") {
       return;
     }
     const row = Number(cell.dataset.cellRow);
     const column = Number(cell.dataset.cellCol);
-    openValueViewer(tab.result, row, column);
+    if (event.ctrlKey || event.metaKey) {
+      openValueViewer(tab.result, row, column);
+      return;
+    }
+    startCellEdit(cell, tab, row, column);
   });
 
   document.addEventListener("mouseover", (event) => {
@@ -608,6 +631,21 @@ function bindEvents(): void {
       closeTabContextMenu();
     }
     const modalOpen = byId<HTMLElement>("modal-root").children.length > 0;
+    if (
+      !modalOpen &&
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLowerCase() === "c" &&
+      !isEditorFocused() &&
+      !(event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']"))
+    ) {
+      const selected = document.querySelector<HTMLElement>("#result-body td.cell-selected[data-cell-row]");
+      const tab = activeTab(state);
+      if (selected && tab?.result) {
+        event.preventDefault();
+        copyCellRaw(tab, Number(selected.dataset.cellRow), Number(selected.dataset.cellCol));
+        return;
+      }
+    }
     if (!modalOpen && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       if (!isEditorFocused()) {
         event.preventDefault();
@@ -1450,10 +1488,21 @@ function renderResultActions(tab?: TabState): void {
     return;
   }
   const selectedCount = tab.selectedRows.size;
+  const changedRows = new Set([...tab.cellEdits.values()].map((edit) => edit.row)).size;
   if (!supportsInsertMode(tab.dbType, tab.insertMode)) {
     tab.insertMode = "insert";
   }
   actions.append(actionButton("copy", "复制结果", "copy", "复制为 TSV"));
+  if (changedRows > 0) {
+    actions.append(
+      actionButton(
+        "copy-updates",
+        `复制 UPDATE (${changedRows})`,
+        "save",
+        `复制 ${changedRows} 行未执行的 UPDATE 语句`,
+      ),
+    );
+  }
   if (selectedCount > 0) {
     actions.append(actionButton("clear-selection", "清除选择", "close", "清除所有已选行"));
   }
@@ -1826,9 +1875,12 @@ function renderResultTab(body: HTMLElement, tab: TabState): void {
     shownColumns.forEach(({ index: columnIndex }) => {
       const cell = document.createElement("td");
       const value = entry.row[columnIndex];
-      setCellContent(cell, value);
+      setCellContent(cell as HTMLTableCellElement, value);
       cell.dataset.cellRow = String(entry.originalIndex);
       cell.dataset.cellCol = String(columnIndex);
+      if (tab.cellEdits.has(cellEditKey(entry.originalIndex, columnIndex))) {
+        cell.classList.add("cell-modified");
+      }
       if (value === null || value === undefined) {
         cell.classList.add("null");
       }
@@ -2384,6 +2436,7 @@ function prepareQueryTab(context: QueryTabContext): TabState {
   tab.tableStructure = undefined;
   tab.describeStatement = undefined;
   tab.selectedRows.clear();
+  tab.cellEdits.clear();
   tab.hasMoreRows = false;
   tab.pageLoading = false;
   tab.resultTab = "results";
@@ -2823,6 +2876,8 @@ function showStructureModal(
   meta.textContent = focusColumn ? `表：${tableName} · 字段：${focusColumn}` : `表：${tableName}`;
   content.append(meta);
 
+  const structureBody = document.createElement("div");
+  structureBody.className = "structure-body";
   let firstMatch: HTMLElement | undefined;
   if (structure.statement) {
     const ddl = document.createElement("div");
@@ -2838,7 +2893,7 @@ function showStructureModal(
       }
       ddl.append(row);
     }
-    content.append(ddl);
+    structureBody.append(ddl);
     if (needle && !firstMatch) {
       firstMatch = (ddl.firstElementChild as HTMLElement | null) ?? undefined;
     }
@@ -2860,7 +2915,7 @@ function showStructureModal(
     head.append(headRow);
     table.append(head);
     const nameIndex = findStructureNameIndex(structure.columns);
-    const body = document.createElement("tbody");
+    const tableBody = document.createElement("tbody");
     for (const row of structure.rows) {
       const tr = document.createElement("tr");
       const values = structure.columns.length ? structure.columns.map((_, index) => row[index]) : [row];
@@ -2880,14 +2935,24 @@ function showStructureModal(
         tr.classList.add("structure-match");
         firstMatch ??= tr;
       }
-      body.append(tr);
+      tableBody.append(tr);
     }
-    table.append(body);
-    content.append(table);
+    table.append(tableBody);
+    structureBody.append(table);
   } else {
-    content.append(
+    structureBody.append(
       emptyState("table", "没有可展示的表结构", "Archery 返回的描述中没有字段明细或 DDL。"),
     );
+  }
+  content.append(structureBody);
+
+  const searchTargets = Array.from(
+    structureBody.querySelectorAll<HTMLElement>(
+      ".structure-ddl-line, .structure-table th, .structure-table td",
+    ),
+  );
+  if (searchTargets.length) {
+    content.insertBefore(createStructureSearch(structureBody, searchTargets), structureBody);
   }
 
   const close = openModal(`表结构 · ${tableName}`, content, "modal-wide");
@@ -2898,6 +2963,170 @@ function showStructureModal(
     }, 30);
   }
 }
+
+function createStructureSearch(
+  structureBody: HTMLElement,
+  targets: HTMLElement[],
+): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "structure-search";
+  const searchIcon = document.createElement("span");
+  searchIcon.className = "structure-search-icon";
+  searchIcon.innerHTML = icon("search", 13);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "structure-search-input";
+  input.placeholder = "搜索字段、类型、备注或 DDL…";
+  input.spellcheck = false;
+  const count = document.createElement("span");
+  count.className = "structure-search-count";
+  const previous = structureSearchButton("上一处", "arrow-up");
+  const next = structureSearchButton("下一处", "arrow-down");
+  const clear = structureSearchButton("清除搜索", "close");
+  clear.classList.add("structure-search-clear");
+  bar.append(searchIcon, input, count, previous, next, clear);
+
+  const originals = new Map<HTMLElement, string>();
+  for (const target of targets) {
+    originals.set(target, target.textContent ?? "");
+  }
+  let matches: HTMLElement[] = [];
+  let index = 0;
+
+  const updateNavigation = (): void => {
+    const query = input.value.trim();
+    count.textContent = query
+      ? matches.length
+        ? `${index + 1}/${matches.length}`
+        : "0/0"
+      : "";
+    previous.disabled = matches.length === 0;
+    next.disabled = matches.length === 0;
+    clear.disabled = !query;
+  };
+
+  const clearMarks = (): void => {
+    for (const target of targets) {
+      target.textContent = originals.get(target) ?? "";
+      target.classList.remove("structure-search-hit");
+    }
+    for (const row of structureBody.querySelectorAll("tr")) {
+      row.classList.remove("structure-search-row");
+    }
+  };
+
+  const highlight = (target: HTMLElement, text: string, query: string): HTMLElement[] => {
+    target.replaceChildren();
+    const lower = text.toLowerCase();
+    const needle = query.toLowerCase();
+    const marks: HTMLElement[] = [];
+    let position = 0;
+    let found = lower.indexOf(needle);
+    while (found >= 0) {
+      if (found > position) {
+        target.append(document.createTextNode(text.slice(position, found)));
+      }
+      const mark = document.createElement("mark");
+      mark.className = "structure-search-mark";
+      mark.textContent = text.slice(found, found + query.length);
+      target.append(mark);
+      marks.push(mark);
+      position = found + query.length;
+      found = lower.indexOf(needle, position);
+    }
+    if (position < text.length) {
+      target.append(document.createTextNode(text.slice(position)));
+    }
+    return marks;
+  };
+
+  const scrollTo = (): void => {
+    if (!matches.length) {
+      return;
+    }
+    for (const mark of matches) {
+      mark.classList.remove("structure-search-current");
+    }
+    const current = matches[index];
+    current?.classList.add("structure-search-current");
+    current?.scrollIntoView({ block: "center", inline: "center" });
+    updateNavigation();
+  };
+
+  const apply = (): void => {
+    clearMarks();
+    matches = [];
+    index = 0;
+    const query = input.value.trim();
+    if (query) {
+      for (const target of targets) {
+        const original = originals.get(target) ?? "";
+        if (!original.toLowerCase().includes(query.toLowerCase())) {
+          continue;
+        }
+        target.classList.add("structure-search-hit");
+        target.closest("tr")?.classList.add("structure-search-row");
+        matches.push(...highlight(target, original, query));
+      }
+      updateNavigation();
+      if (matches.length) {
+        scrollTo();
+      }
+    } else {
+      updateNavigation();
+    }
+  };
+
+  input.addEventListener("input", apply);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!matches.length) {
+        return;
+      }
+      index = (index + (event.shiftKey ? -1 : 1) + matches.length) % matches.length;
+      scrollTo();
+    } else if (event.key === "Escape" && input.value) {
+      event.preventDefault();
+      event.stopPropagation();
+      input.value = "";
+      apply();
+    }
+  });
+  previous.addEventListener("click", () => {
+    if (!matches.length) {
+      return;
+    }
+    index = (index - 1 + matches.length) % matches.length;
+    scrollTo();
+  });
+  next.addEventListener("click", () => {
+    if (!matches.length) {
+      return;
+    }
+    index = (index + 1) % matches.length;
+    scrollTo();
+  });
+  clear.addEventListener("click", () => {
+    input.value = "";
+    apply();
+    input.focus();
+  });
+  updateNavigation();
+  window.setTimeout(() => input.focus(), 30);
+  return bar;
+}
+
+function structureSearchButton(title: string, iconName: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "structure-search-button";
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.innerHTML = icon(iconName, 13);
+  return button;
+}
+
 
 function lineMentionsColumn(line: string, column: string): boolean {
   const escaped = column.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -3009,6 +3238,7 @@ async function executeQuery(explain: boolean, options: ExecuteOptions = {}): Pro
   tab.columnComments = undefined;
   tab.tableStructure = undefined;
   tab.selectedRows.clear();
+  tab.cellEdits.clear();
   tab.hasMoreRows = false;
   tab.pageLoading = false;
   const pageSize = Math.max(1, tab.limit > 0 ? tab.limit : tab.pageSize > 0 ? tab.pageSize : 100);
@@ -3184,6 +3414,7 @@ async function loadMoreRows(tab: TabState): Promise<void> {
     tab.status = "success";
     const loaded = Math.min(targetLoaded, result.rows.length);
     const hasMore = result.rows.length > loaded;
+    tab.cellEdits.clear();
     tab.result = { ...result, rows: result.rows.slice(0, loaded) };
     tab.hasMoreRows = hasMore;
     const pageCount = Math.max(1, Math.ceil(loaded / pageSize));
@@ -3219,6 +3450,7 @@ async function runDescribe(tab: TabState): Promise<void> {
   tab.error = undefined;
   tab.result = undefined;
   tab.selectedRows.clear();
+  tab.cellEdits.clear();
   tab.hasMoreRows = false;
   tab.pageLoading = false;
   tab.startedAt = performance.now();
@@ -3494,6 +3726,10 @@ async function handleResultAction(action: string): Promise<void> {
     await copySelectedDelete(tab);
     return;
   }
+  if (action === "copy-updates") {
+    await copyChangedUpdates(tab);
+    return;
+  }
   const format =
     action === "export-csv" ? "csv" : action === "export-json" ? "json" : action === "export-sql" ? "sql" : undefined;
   if (!format) {
@@ -3611,6 +3847,176 @@ function endRowDrag(): void {
   }
 }
 
+
+
+function cellEditKey(row: number, column: number): string {
+  return `${row}:${column}`;
+}
+
+function sameCellValue(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (
+    left !== null &&
+    right !== null &&
+    typeof left === "object" &&
+    typeof right === "object"
+  ) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  return false;
+}
+
+function parseEditedValue(text: string, original: unknown): unknown {
+  if (original === null || original === undefined) {
+    return text.trim() === "" || text.trim().toUpperCase() === "NULL" ? null : text;
+  }
+  if (typeof original === "number") {
+    if (text.trim() !== "" && Number.isFinite(Number(text))) {
+      return Number(text);
+    }
+    return text;
+  }
+  if (typeof original === "boolean") {
+    if (/^(true|1)$/i.test(text.trim())) {
+      return true;
+    }
+    if (/^(false|0)$/i.test(text.trim())) {
+      return false;
+    }
+    return text;
+  }
+  if (typeof original === "object") {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function startCellEdit(
+  cell: HTMLElement,
+  tab: TabState,
+  row: number,
+  column: number,
+): void {
+  if (cell.querySelector(".cell-editor") || !tab.result) {
+    return;
+  }
+  const key = cellEditKey(row, column);
+  const value = tab.result.rows[row]?.[column];
+  const original = tab.cellEdits.get(key)?.original ?? value;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "cell-editor";
+  input.value = rawCellValue(value);
+  input.spellcheck = false;
+  let finished = false;
+
+  const restore = (): void => {
+    cell.classList.remove("cell-editing");
+    cell.classList.remove("null");
+    setCellContent(cell as HTMLTableCellElement, value);
+    if (value === null || value === undefined) {
+      cell.classList.add("null");
+    }
+    cell.classList.toggle("cell-modified", tab.cellEdits.has(key));
+  };
+
+  const finish = (commit: boolean): void => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    if (!commit) {
+      restore();
+      return;
+    }
+    const next = parseEditedValue(input.value, original);
+    if (tab.result) {
+      tab.result.rows[row][column] = next;
+    }
+    if (sameCellValue(next, original)) {
+      tab.cellEdits.delete(key);
+    } else {
+      tab.cellEdits.set(key, { row, column, original, value: next });
+    }
+    cell.classList.remove("cell-editing");
+    cell.classList.remove("null");
+    setCellContent(cell as HTMLTableCellElement, next);
+    if (next === null || next === undefined) {
+      cell.classList.add("null");
+    }
+    cell.classList.toggle("cell-modified", tab.cellEdits.has(key));
+    selectResultCell(cell);
+    renderResultActions(tab);
+  };
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+  cell.classList.add("cell-editing");
+  cell.replaceChildren(input);
+  input.focus();
+  input.select();
+}
+
+function rawCellValue(value: unknown): string {
+  if (value === null) {
+    return "NULL";
+  }
+  if (value === undefined) {
+    return "";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function commitActiveCellEdit(except?: HTMLElement): void {
+  const editor = document.querySelector<HTMLInputElement>("#result-body .cell-editor");
+  if (editor && !except?.contains(editor)) {
+    editor.blur();
+  }
+}
+
+function selectResultCell(cell: HTMLElement): void {
+  clearSelectedResultCell();
+  cell.classList.add("cell-selected");
+}
+
+function clearSelectedResultCell(): void {
+  for (const cell of document.querySelectorAll<HTMLElement>("#result-body td.cell-selected")) {
+    cell.classList.remove("cell-selected");
+  }
+}
+
+function copyCellRaw(tab: TabState, row: number, column: number): void {
+  if (!tab.result) {
+    return;
+  }
+  const value = tab.result.rows[row]?.[column];
+  const text = rawCellValue(value);
+  const columnName = tab.result.columns[column] ?? `列 ${column + 1}`;
+  void bridge
+    .request({ type: "copyText", text })
+    .then(() => toast(`已复制原始数据：${columnName} · 第 ${row + 1} 行`, "info", 1400))
+    .catch((error: unknown) => toast(errorText(error), "error"));
+}
+
 function updateSelectionUi(tab: TabState): void {
   if (activeTab(state)?.id !== tab.id) {
     return;
@@ -3636,6 +4042,63 @@ function updateSelectionUi(tab: TabState): void {
   renderResultActions(tab);
 }
 
+
+
+async function copyChangedUpdates(tab: TabState): Promise<void> {
+  if (!tab.result) {
+    return;
+  }
+  if (!tab.tableName) {
+    toast("当前结果未关联具体表，无法生成 UPDATE。请从左侧数据表列表打开查询。", "warning");
+    return;
+  }
+  if (!tab.cellEdits.size) {
+    toast("当前没有未执行的单元格修改", "warning");
+    return;
+  }
+  let statement = tab.tableStructure?.statement;
+  if (!statement) {
+    const metadata = await loadTableMetadata(tab);
+    statement = metadata?.structure.statement;
+  }
+  const byRow = new Map<number, Array<{ column: number; original: unknown; value: unknown }>>();
+  for (const edit of tab.cellEdits.values()) {
+    const edits = byRow.get(edit.row) ?? [];
+    edits.push({ column: edit.column, original: edit.original, value: edit.value });
+    byRow.set(edit.row, edits);
+  }
+  const updates = [...byRow.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([row, edits]) => {
+      const currentRow = tab.result?.rows[row] ?? [];
+      const originalRow = currentRow.slice();
+      for (const edit of edits) {
+        originalRow[edit.column] = edit.original;
+      }
+      return {
+        originalRow,
+        changes: edits.map((edit) => ({ columnIndex: edit.column, value: edit.value })),
+      };
+    });
+  try {
+    const sql = buildUpdateStatements({
+      columns: tab.result.columns,
+      updates,
+      tableName: tab.tableName,
+      dbName: tab.dbName,
+      schemaName: tab.schemaName,
+      dbType: tab.dbType,
+      primaryKey: extractPrimaryKeyColumns(statement),
+    });
+    await bridge.request({ type: "copyText", text: sql });
+    toast(`已复制 ${updates.length} 条 UPDATE 语句到剪贴板`, "info");
+  } catch (error) {
+    toast(
+      error instanceof UpdateSqlError ? error.message : errorText(error),
+      "error",
+    );
+  }
+}
 
 async function copySelectedDelete(tab: TabState): Promise<void> {
   if (!tab.result) {
@@ -4593,6 +5056,7 @@ function resetTabQueryState(tab: TabState): void {
   tab.columnComments = undefined;
   tab.tableStructure = undefined;
   tab.selectedRows.clear();
+  tab.cellEdits.clear();
   tab.hasMoreRows = false;
   tab.pageLoading = false;
   tab.startedAt = undefined;

@@ -1584,6 +1584,76 @@ body.selecting-rows .grid tbody tr {
   background: color-mix(in srgb, var(--accent) 15%, var(--editor-bg));
 }
 
+.grid tbody td[data-cell-row] {
+  cursor: cell;
+}
+
+.grid tbody td.cell-selected {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.grid tbody td.cell-selected.null {
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.grid tbody tr td.cell-selected,
+.grid tbody tr:nth-child(odd) td.cell-selected,
+.grid tbody tr:nth-child(even) td.cell-selected,
+.grid tbody tr:hover td.cell-selected,
+.grid tbody tr.row-selected td.cell-selected,
+.grid tbody tr.row-selected:hover td.cell-selected {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.grid tbody td.cell-modified {
+  position: relative;
+}
+
+.grid tbody td.cell-modified:not(.cell-selected) {
+  background: color-mix(in srgb, var(--warning) 11%, var(--editor-bg));
+}
+
+.grid tbody tr:nth-child(even) td.cell-modified:not(.cell-selected),
+.grid tbody tr:hover td.cell-modified:not(.cell-selected),
+.grid tbody tr.row-selected td.cell-modified:not(.cell-selected) {
+  background: color-mix(in srgb, var(--warning) 11%, var(--editor-bg));
+}
+
+.grid tbody td.cell-modified::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  border-top: 6px solid var(--warning);
+  border-right: 6px solid transparent;
+  pointer-events: none;
+}
+
+.grid tbody td.cell-editing {
+  position: relative;
+  padding: 0;
+  background: var(--input-bg);
+}
+
+.grid tbody td.cell-editing .cell-editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  box-sizing: border-box;
+}
+
 .grid tbody tr.row-selected td.row-number {
   background: color-mix(in srgb, var(--accent) 15%, var(--vscode-editorGutter-background, var(--editor-bg)));
 }
@@ -1967,6 +2037,92 @@ body.selecting-rows .grid tbody tr {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.structure-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  margin: 0 0 10px;
+  padding: 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--input-bg);
+  color: var(--muted);
+}
+
+.structure-search-icon {
+  display: inline-flex;
+  flex: 0 0 13px;
+}
+
+.structure-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.structure-search-input:focus {
+  outline: none;
+}
+
+.structure-search-count {
+  flex: 0 0 auto;
+  min-width: 38px;
+  text-align: right;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.structure-search-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.structure-search-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.structure-search-button:disabled {
+  opacity: 0.35;
+}
+
+.structure-search-mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.structure-search-mark.structure-search-current {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+  text-decoration: underline 2px;
+  text-underline-offset: 2px;
+}
+
+.structure-ddl-line.structure-search-hit {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.structure-table tr.structure-search-row td {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .structure-ddl {
