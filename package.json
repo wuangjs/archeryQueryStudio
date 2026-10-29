@@ -2,7 +2,7 @@
   "name": "archery-query-studio",
   "displayName": "Archery Query Studio",
   "description": "在 VS Code 中通过 Archery 浏览数据库对象、编写并执行 SQL、查看/导出结果，类似 HeidiSQL 的查询体验。",
-  "version": "0.1.23",
+  "version": "0.1.26",
   "publisher": "local-dev",
   "license": "MIT",
   "engines": {

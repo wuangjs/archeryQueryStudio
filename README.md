@@ -27,7 +27,7 @@
 ```bash
 npm install
 npm run package
-code --install-extension archery-query-studio-0.1.23.vsix
+code --install-extension archery-query-studio-0.1.26.vsix
 ```
 
 也可以直接在 VS Code 中打开 `.vsix` 文件安装。

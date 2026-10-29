@@ -564,6 +564,22 @@ function bindEvents(): void {
       }
     }
   });
+  document.addEventListener("copy", (event) => {
+    if (isEditorFocused()) {
+      return;
+    }
+    const selected = document.querySelector<HTMLElement>("#result-body td.cell-selected[data-cell-row]");
+    const tab = activeTab(state);
+    if (!selected || !tab?.result) {
+      return;
+    }
+    const row = Number(selected.dataset.cellRow);
+    const column = Number(selected.dataset.cellCol);
+    const text = rawCellValue(tab.result.rows[row]?.[column]);
+    event.clipboardData?.setData("text/plain", text);
+    event.preventDefault();
+    notifyCellCopied(tab, row, column);
+  });
   byId<HTMLElement>("result-body").addEventListener("mousedown", beginRowDrag);
   document.addEventListener("mousemove", moveRowDrag);
   document.addEventListener("mouseup", endRowDrag);
@@ -636,13 +652,20 @@ function bindEvents(): void {
       (event.ctrlKey || event.metaKey) &&
       event.key.toLowerCase() === "c" &&
       !isEditorFocused() &&
-      !(event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']"))
+      !(event.target instanceof HTMLElement && event.target.closest(
+        "input:not([type='checkbox']):not([type='radio']), textarea, select, [contenteditable='true']",
+      ))
     ) {
       const selected = document.querySelector<HTMLElement>("#result-body td.cell-selected[data-cell-row]");
       const tab = activeTab(state);
       if (selected && tab?.result) {
         event.preventDefault();
         copyCellRaw(tab, Number(selected.dataset.cellRow), Number(selected.dataset.cellCol));
+        return;
+      }
+      if (tab?.result && tab.selectedRows.size) {
+        event.preventDefault();
+        void copySelectedRows(tab);
         return;
       }
     }
@@ -3996,12 +4019,29 @@ function commitActiveCellEdit(except?: HTMLElement): void {
 function selectResultCell(cell: HTMLElement): void {
   clearSelectedResultCell();
   cell.classList.add("cell-selected");
+  cell.tabIndex = -1;
+  cell.setAttribute("aria-selected", "true");
+  cell.focus({ preventScroll: true });
 }
 
 function clearSelectedResultCell(): void {
   for (const cell of document.querySelectorAll<HTMLElement>("#result-body td.cell-selected")) {
     cell.classList.remove("cell-selected");
+    cell.removeAttribute("aria-selected");
   }
+}
+
+let lastCellCopyNotice: { key: string; at: number } | undefined;
+
+function notifyCellCopied(tab: TabState, row: number, column: number): void {
+  const key = `${tab.id}:${row}:${column}`;
+  const now = performance.now();
+  if (lastCellCopyNotice?.key === key && now - lastCellCopyNotice.at < 600) {
+    return;
+  }
+  lastCellCopyNotice = { key, at: now };
+  const columnName = tab.result?.columns[column] ?? `列 ${column + 1}`;
+  toast(`已复制原始数据：${columnName} · 第 ${row + 1} 行`, "info", 1400);
 }
 
 function copyCellRaw(tab: TabState, row: number, column: number): void {
@@ -4010,10 +4050,9 @@ function copyCellRaw(tab: TabState, row: number, column: number): void {
   }
   const value = tab.result.rows[row]?.[column];
   const text = rawCellValue(value);
-  const columnName = tab.result.columns[column] ?? `列 ${column + 1}`;
   void bridge
     .request({ type: "copyText", text })
-    .then(() => toast(`已复制原始数据：${columnName} · 第 ${row + 1} 行`, "info", 1400))
+    .then(() => notifyCellCopied(tab, row, column))
     .catch((error: unknown) => toast(errorText(error), "error"));
 }
 
@@ -4181,6 +4220,32 @@ async function copySelectedInsert(tab: TabState): Promise<void> {
   }
 }
 
+
+
+async function copySelectedRows(tab: TabState): Promise<void> {
+  if (!tab.result || !tab.selectedRows.size) {
+    return;
+  }
+  const rows = tab.result.rows.filter((_, index) => tab.selectedRows.has(index));
+  const lines = [
+    tab.result.columns.join("\t"),
+    ...rows.map((row) =>
+      row
+        .map((value) =>
+          value === null || value === undefined
+            ? "\\N"
+            : formatValue(value).replace(/\r?\n/g, " ").replace(/\t/g, " "),
+        )
+        .join("\t"),
+    ),
+  ];
+  try {
+    await bridge.request({ type: "copyText", text: lines.join("\n") });
+    toast(`已复制 ${rows.length} 行到剪贴板`, "info");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
 
 async function copyResult(tab: TabState): Promise<void> {
   if (!tab.result) {

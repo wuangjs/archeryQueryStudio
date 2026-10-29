@@ -1588,6 +1588,10 @@ body.selecting-rows .grid tbody tr {
   cursor: cell;
 }
 
+.grid tbody td[data-cell-row]:focus {
+  outline: none;
+}
+
 .grid tbody td.cell-selected {
   background: var(--vscode-button-background, #0e639c);
   color: var(--vscode-button-foreground, #ffffff);
@@ -2641,7 +2645,7 @@ body.selecting-rows .grid tbody tr {
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.24);
   font-size: 11.5px;
   line-height: 1.5;
-  pointer-events: auto;
+  pointer-events: none;
   animation: toast-in 0.18s ease;
 }
 
@@ -2680,6 +2684,7 @@ body.selecting-rows .grid tbody tr {
 }
 
 .toast-close {
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
